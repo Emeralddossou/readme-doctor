@@ -29,7 +29,9 @@ export class EnvRule implements Rule {
       }
 
       // Check if mentioned in README
-      const mentionedInReadme = readmeText.includes(codeVar);
+      const escapedCodeVar = codeVar.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const codeVarRegex = new RegExp(`\\b${escapedCodeVar}\\b`, 'i');
+      const mentionedInReadme = codeVarRegex.test(readmeText);
       if (!mentionedInReadme && readmeText) {
         issues.push({
           id: `${this.id}:missing-readme:${codeVar}`,
@@ -47,7 +49,9 @@ export class EnvRule implements Rule {
         continue;
       }
       
-      const mentionedInReadme = readmeText.includes(exampleVar);
+      const escapedExampleVar = exampleVar.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const exampleVarRegex = new RegExp(`\\b${escapedExampleVar}\\b`, 'i');
+      const mentionedInReadme = exampleVarRegex.test(readmeText);
       if (!mentionedInReadme && readmeText) {
         // Only add if not already added in step 1
         const alreadyAdded = issues.some(iss => iss.id === `${this.id}:missing-readme:${exampleVar}`);

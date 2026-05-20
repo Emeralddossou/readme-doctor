@@ -1,11 +1,19 @@
 import { AnalysisReport, Issue, ProjectContext, ReadmeContext } from '../core/types.js';
 import { ScriptRule } from './rules/scriptRule.js';
 import { EnvRule } from './rules/envRule.js';
+import { StructureRule } from './rules/structureRule.js';
+import { DockerRule } from './rules/dockerRule.js';
+import { LicenseRule } from './rules/licenseRule.js';
+import { TranslationSyncRule } from './rules/translationSyncRule.js';
 import { Rule } from './rules/baseRule.js';
 
 const RULES: Rule[] = [
   new ScriptRule(),
-  new EnvRule()
+  new EnvRule(),
+  new StructureRule(),
+  new DockerRule(),
+  new LicenseRule(),
+  new TranslationSyncRule()
 ];
 
 /**

@@ -6,6 +6,59 @@ import { parseReadme } from '../scanners/readmeParser.js';
 import { analyzeProject } from '../analyzers/engine.js';
 import { generateMarkdownReport, generateJsonReport, colorizeMarkdown } from '../reports/generator.js';
 import { getAIProvider } from '../ai/index.js';
+import { ProjectContext } from '../core/types.js';
+
+function printDashboard(projectContext: ProjectContext): void {
+  const rootFiles = projectContext.files.filter(f => !f.includes('/') && !f.includes(path.sep));
+  const mainReadme = projectContext.readmePath ? projectContext.readmePath.toLowerCase() : '';
+  const translations = rootFiles.filter(f => {
+    const lower = f.toLowerCase();
+    return lower.startsWith('readme') && lower.endsWith('.md') && lower !== mainReadme;
+  });
+
+  const projectTypes: string[] = [];
+  if (projectContext.files.includes('package.json')) projectTypes.push('Node.js');
+  if (projectContext.files.includes('Cargo.toml')) projectTypes.push('Rust');
+  if (projectContext.files.includes('go.mod')) projectTypes.push('Go');
+  if (projectContext.files.includes('pyproject.toml') || projectContext.files.includes('requirements.txt')) projectTypes.push('Python');
+  if (projectContext.files.includes('composer.json')) projectTypes.push('PHP');
+  if (projectContext.files.includes('pom.xml')) projectTypes.push('Java/Maven');
+  if (projectContext.files.includes('Gemfile')) projectTypes.push('Ruby');
+  const projectTypeStr = projectTypes.join(', ') || 'Unknown / General';
+
+  const scriptsCount = Object.keys(projectContext.scripts).length;
+  const envCountCode = projectContext.envVariables.length;
+  const envCountEx = projectContext.envExampleVariables.length;
+
+  let dockerStr = 'Not Detected';
+  if (projectContext.hasDocker && projectContext.hasDockerCompose) {
+    dockerStr = 'Supported (Dockerfile & Compose)';
+  } else if (projectContext.hasDocker) {
+    dockerStr = 'Supported (Dockerfile only)';
+  } else if (projectContext.hasDockerCompose) {
+    dockerStr = 'Supported (docker-compose only)';
+  }
+
+  const translationsStr = translations.length > 0 
+    ? `Found (${translations.join(', ')})` 
+    : 'None Detected';
+
+  const licenseFile = rootFiles.find(f => {
+    const lower = f.toLowerCase();
+    return lower === 'license' || lower === 'licence' || lower.startsWith('license.') || lower.startsWith('licence.');
+  });
+  const licenseStr = licenseFile ? `Detected (${licenseFile})` : 'Not Detected';
+
+  console.log('\n\x1b[1;36m🩺 README-Doctor Project Summary:\x1b[0m');
+  console.log(`  \x1b[1m📁 Project Name:\x1b[22m     \x1b[32m${projectContext.projectName}\x1b[0m`);
+  console.log(`  \x1b[1m🏷️  Version:\x1b[22m          \x1b[32m${projectContext.version}\x1b[0m`);
+  console.log(`  \x1b[1m💻 Project Type:\x1b[22m     \x1b[36m${projectTypeStr}\x1b[0m`);
+  console.log(`  \x1b[1m📜 Scripts:\x1b[22m          \x1b[35m${scriptsCount} scripts configured\x1b[0m`);
+  console.log(`  \x1b[1m🔑 Env Variables:\x1b[22m    \x1b[33m${envCountCode} in code / ${envCountEx} in .env.example\x1b[0m`);
+  console.log(`  \x1b[1m🐳 Docker:\x1b[22m           \x1b[36m${dockerStr}\x1b[0m`);
+  console.log(`  \x1b[1m🌐 Translations:\x1b[22m     \x1b[35m${translationsStr}\x1b[0m`);
+  console.log(`  \x1b[1m📄 License:\x1b[22m          \x1b[32m${licenseStr}\x1b[0m\n`);
+}
 
 export function setupCLI(): Command {
   const program = new Command();
@@ -29,6 +82,10 @@ export function setupCLI(): Command {
         console.log(`🔍 Scanning repository at: ${path.resolve(repoPath)}...`);
         const projectContext = await scanProject(repoPath);
         const readmeContext = parseReadme(projectContext.readmeContent);
+        
+        if (!options.json) {
+          printDashboard(projectContext);
+        }
         
         console.log('⚡ Running static analysis rules...');
         const report = await analyzeProject(projectContext, readmeContext);

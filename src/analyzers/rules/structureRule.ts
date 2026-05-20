@@ -1,0 +1,92 @@
+import { Issue, ProjectContext, ReadmeContext } from '../../core/types.js';
+import { Rule } from './baseRule.js';
+
+interface SectionRequirement {
+  name: string;
+  aliases: string[];
+  severity: 'warning' | 'info';
+  description: string;
+  suggestion: string;
+  condition?: (projectContext: ProjectContext) => boolean;
+}
+
+export class StructureRule implements Rule {
+  id = 'missing-readme-section';
+  name = 'README Structure & Completeness';
+  description = 'Ensures essential sections like Installation, Usage, Configuration, Contributing, and License are present';
+
+  private requirements: SectionRequirement[] = [
+    {
+      name: 'Installation',
+      aliases: ['installation', 'setup', 'get started', 'getting started', 'prerequisites', 'démarrage', 'configuration requise'],
+      severity: 'warning',
+      description: 'The README is missing a section explaining how to install and setup the project.',
+      suggestion: 'Add an "Installation" section explaining step-by-step commands to get the project ready. For example:\n\n## Installation\n```bash\nnpm install\n```'
+    },
+    {
+      name: 'Usage',
+      aliases: ['usage', 'run', 'running', 'example', 'examples', 'utilisation', 'lancement'],
+      severity: 'warning',
+      description: 'The README is missing a section explaining how to run or use the project.',
+      suggestion: 'Add a "Usage" section with clear examples or command-line scripts to run the application. For example:\n\n## Usage\n```bash\nnpm start\n```'
+    },
+    {
+      name: 'Configuration',
+      aliases: ['config', 'configuration', 'environment', 'env', 'variables'],
+      severity: 'warning',
+      description: 'The project uses environment variables, but the README lacks a "Configuration" section.',
+      suggestion: 'Add a "Configuration" section to document necessary environment variables and configuration files. For example:\n\n## Configuration\nCreate a `.env` file with:\n```env\nPORT=3000\n```',
+      condition: (ctx) => ctx.envVariables.length > 0 || ctx.envExampleVariables.length > 0
+    },
+    {
+      name: 'Contributing',
+      aliases: ['contribute', 'contributing', 'contribution', 'contribuer'],
+      severity: 'info',
+      description: 'The README lacks a section on how other developers can contribute to this project.',
+      suggestion: 'Add a "Contributing" section to invite pull requests and describe standard development workflows. For example:\n\n## Contributing\nContributions are welcome! Please open an issue or submit a pull request.'
+    },
+    {
+      name: 'License',
+      aliases: ['license', 'licence'],
+      severity: 'info',
+      description: 'The README does not explicitly mention the project license.',
+      suggestion: 'Add a "License" section specifying the open source license of the project. For example:\n\n## License\nThis project is licensed under the MIT License.'
+    }
+  ];
+
+  async run(projectContext: ProjectContext, readmeContext: ReadmeContext): Promise<Issue[]> {
+    const issues: Issue[] = [];
+    
+    // Only run if a README exists
+    if (!projectContext.readmeContent) {
+      return [];
+    }
+
+    const sections = readmeContext.sections;
+
+    for (const req of this.requirements) {
+      // Check if requirement condition is met
+      if (req.condition && !req.condition(projectContext)) {
+        continue;
+      }
+
+      // Check if any existing section matches the aliases
+      const matches = sections.some(sec => {
+        const titleLower = sec.title.toLowerCase();
+        return req.aliases.some(alias => titleLower.includes(alias));
+      });
+
+      if (!matches) {
+        issues.push({
+          id: `${this.id}:${req.name.toLowerCase()}`,
+          severity: req.severity,
+          ruleName: this.name,
+          message: req.description,
+          suggestion: req.suggestion
+        });
+      }
+    }
+
+    return issues;
+  }
+}
