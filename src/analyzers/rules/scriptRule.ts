@@ -55,7 +55,7 @@ export class ScriptRule implements Rule {
     const definedScripts = Object.keys(projectContext.scripts);
     
     // Only run if the project has a package.json (indicated by defined scripts)
-    if (projectContext.files.includes('package.json')) {
+    if (projectContext.files.some(file => file === 'package.json' || file.endsWith('/package.json'))) {
       const checkedScripts = new Set<string>();
 
       for (const ref of this.extractScriptReferences(readmeContext)) {

@@ -69,6 +69,70 @@ describe('Project scanner reliability', () => {
       await rm(repo, { recursive: true, force: true });
     }
   });
+
+  it('keeps root files visible even when ignored environment folders are large', async () => {
+    const repo = await mkdtemp(path.join(os.tmpdir(), 'readme-doctor-large-env-'));
+
+    try {
+      await writeFile(path.join(repo, 'README.md'), '# Root README\n');
+      await mkdir(path.join(repo, '.venv'));
+      for (let index = 0; index < 10; index++) {
+        await writeFile(path.join(repo, '.venv', `generated-${index}.py`), 'print("ignored")');
+      }
+
+      const context = await scanProject(repo);
+
+      expect(context.readmePath).toBe('README.md');
+      expect(context.files).toContain('README.md');
+      expect(context.files.some(file => file.includes('.venv'))).toBe(false);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('detects nested manifests without letting them rename the root project', async () => {
+    const repo = await mkdtemp(path.join(os.tmpdir(), 'readme-doctor-monorepo-'));
+
+    try {
+      await writeFile(path.join(repo, 'README.md'), '# Monorepo Product\n');
+      await mkdir(path.join(repo, 'frontend'));
+      await writeFile(path.join(repo, 'frontend', 'package.json'), JSON.stringify({
+        name: 'frontend',
+        scripts: {
+          dev: 'vite'
+        }
+      }));
+
+      const context = await scanProject(repo);
+
+      expect(context.projectName).toBe(path.basename(repo));
+      expect(context.projectTypes).toContain('Node.js');
+      expect(context.scripts).toMatchObject({ dev: 'vite' });
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores common dev-server environment variables injected by tooling', async () => {
+    const repo = await mkdtemp(path.join(os.tmpdir(), 'readme-doctor-tooling-env-'));
+
+    try {
+      await writeFile(path.join(repo, 'README.md'), '# Electron App\n');
+      await writeFile(path.join(repo, 'package.json'), JSON.stringify({ name: 'electron-app' }));
+      await mkdir(path.join(repo, 'src'));
+      await writeFile(path.join(repo, 'src', 'main.js'), [
+        'if (process.env.ELECTRON_RENDERER_URL) {',
+        '  console.log(process.env.ELECTRON_RENDERER_URL);',
+        '}'
+      ].join('\n'));
+
+      const context = await scanProject(repo);
+
+      expect(context.envVariables).not.toContain('ELECTRON_RENDERER_URL');
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('README parser evidence', () => {

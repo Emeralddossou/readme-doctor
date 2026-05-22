@@ -110,4 +110,43 @@ describe('StructureRule', () => {
 
     expect(issues).toHaveLength(0);
   });
+
+  it('should accept runnable commands and env documentation even without exact Usage/Configuration headings', async () => {
+    const projectContext: ProjectContext = {
+      rootPath: '.',
+      projectName: 'vite-app',
+      version: '1.0.0',
+      description: 'A test project',
+      packageManager: 'npm',
+      projectTypes: ['Node.js'],
+      scripts: { dev: 'vite' },
+      dependencies: [],
+      devDependencies: [],
+      hasDocker: false,
+      hasDockerCompose: false,
+      envVariables: ['VITE_API_KEY'],
+      envVariableSources: {},
+      envVariableOptional: {},
+      envExampleVariables: ['VITE_API_KEY'],
+      files: ['package.json', '.env.example'],
+      readmePath: 'README.md',
+      readmeContent: '# App\n\n## Installation\nCopy `.env.example` to `.env` and set `VITE_API_KEY`.\n\n```bash\nnpm run dev\n```\n\n## Contributing\nPRs welcome.\n\n## License\nMIT'
+    };
+
+    const readmeContext: ReadmeContext = {
+      sections: [
+        { title: 'App', level: 1, content: '' },
+        { title: 'Installation', level: 2, content: 'Copy `.env.example` to `.env` and set `VITE_API_KEY`.' },
+        { title: 'Contributing', level: 2, content: 'PRs welcome.' },
+        { title: 'License', level: 2, content: 'MIT' }
+      ],
+      commands: ['npm run dev'],
+      commandDetails: [{ command: 'npm run dev', line: 6 }]
+    };
+
+    const rule = new StructureRule();
+    const issues = await rule.run(projectContext, readmeContext);
+
+    expect(issues).toHaveLength(0);
+  });
 });

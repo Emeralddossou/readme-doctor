@@ -2,9 +2,17 @@ import fs from 'fs/promises';
 import path from 'path';
 import { IssueEvidence, ProjectContext } from '../core/types.js';
 
-const IGNORED_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', '.next', '.vuepress', '.gemini']);
+const IGNORED_DIRS = new Set([
+  'node_modules', '.git', 'dist', 'build', 'coverage', '.next', '.vuepress', '.gemini',
+  '.venv', 'venv', 'env', '.pytest_cache', '.ruff_cache', '.mypy_cache', '.tox', '__pycache__',
+  '.virtuality', 'vendor'
+]);
 const SOURCE_EXTENSIONS = new Set(['.ts', '.js', '.tsx', '.jsx', '.py', '.go', '.rs', '.java', '.rb', '.php']);
 const PLACEHOLDER_ENV_NAMES = new Set(['VAR_NAME', 'VARIABLE_NAME', 'ENV_VAR', 'ENV_VARIABLE', 'YOUR_API_KEY', 'YOUR_TOKEN']);
+const TOOLING_ENV_NAMES = new Set([
+  'CI', 'GITHUB_ACTIONS', 'NODE_ENV', 'NODE_OPTIONS', 'NODE_EXTRA_CA_CERTS',
+  'ELECTRON_RENDERER_URL', 'VITE_DEV_SERVER_URL'
+]);
 
 /**
  * Recursively lists all files in a directory up to a max limit to avoid memory/loop issues.
@@ -24,18 +32,23 @@ async function walkDir(dir: string, baseDir: string, maxFiles = 1000): Promise<s
       return; // Ignore inaccessible folders
     }
 
-    for (const entry of entries) {
+    const fileEntries = entries.filter(entry => entry.isFile());
+    const dirEntries = entries.filter(entry => entry.isDirectory());
+
+    for (const entry of fileEntries) {
+      if (fileCount >= maxFiles) break;
+
+      const relativePath = path.relative(baseDir, path.join(currentDir, entry.name));
+      result.push(relativePath);
+      fileCount++;
+    }
+
+    for (const entry of dirEntries) {
       if (fileCount >= maxFiles) break;
 
       const name = entry.name;
-      if (entry.isDirectory()) {
-        if (IGNORED_DIRS.has(name)) continue;
-        await walk(path.join(currentDir, name));
-      } else if (entry.isFile()) {
-        const relativePath = path.relative(baseDir, path.join(currentDir, name));
-        result.push(relativePath);
-        fileCount++;
-      }
+      if (IGNORED_DIRS.has(name)) continue;
+      await walk(path.join(currentDir, name));
     }
   }
 
@@ -64,7 +77,7 @@ function findReadme(files: string[]): string | null {
 async function parseEnvExample(filePath: string): Promise<string[]> {
   try {
     const content = await fs.readFile(filePath, 'utf-8');
-    const keys: string[] = [];
+    const keys = new Set<string>();
     const lines = content.split(/\r?\n/);
     
     // Match line starting with word characters and optional spaces followed by =
@@ -74,21 +87,21 @@ async function parseEnvExample(filePath: string): Promise<string[]> {
     for (const line of lines) {
       const match = line.match(regex);
       if (match && match[1]) {
-        keys.push(match[1]);
+        keys.add(match[1]);
       }
     }
-    return keys;
+    return Array.from(keys);
   } catch {
     return [];
   }
 }
 
 function detectPackageManager(files: string[]): string | null {
-  if (files.includes('pnpm-lock.yaml')) return 'pnpm';
-  if (files.includes('yarn.lock')) return 'yarn';
-  if (files.includes('bun.lockb') || files.includes('bun.lock')) return 'bun';
-  if (files.includes('package-lock.json') || files.includes('npm-shrinkwrap.json')) return 'npm';
-  if (files.includes('package.json')) return 'npm';
+  if (files.some(file => file === 'pnpm-lock.yaml' || file.endsWith('/pnpm-lock.yaml'))) return 'pnpm';
+  if (files.some(file => file === 'yarn.lock' || file.endsWith('/yarn.lock'))) return 'yarn';
+  if (files.some(file => file === 'bun.lockb' || file.endsWith('/bun.lockb') || file === 'bun.lock' || file.endsWith('/bun.lock'))) return 'bun';
+  if (files.some(file => file === 'package-lock.json' || file.endsWith('/package-lock.json') || file === 'npm-shrinkwrap.json' || file.endsWith('/npm-shrinkwrap.json'))) return 'npm';
+  if (files.some(file => file === 'package.json' || file.endsWith('/package.json'))) return 'npm';
   return null;
 }
 
@@ -149,10 +162,10 @@ function hasPhpUnitTests(files: string[]): boolean {
 
 function isEnvReferenceOptional(line: string, variableName: string): boolean {
   const escaped = variableName.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-  const functionWithDefault = new RegExp(`\\b(?:env|env_get|getenv)\\s*\\(\\s*['"]${escaped}['"]\\s*,`);
+  const functionWithDefault = new RegExp(`\\b(?:env|env_get|getenv|os\\.getenv|os\\.environ\\.get)\\s*\\(\\s*['"]${escaped}['"]\\s*,`);
   if (functionWithDefault.test(line)) return true;
 
-  const nullCoalescing = new RegExp(`(?:process\\.env\\.${escaped}|process\\.env\\[['"]${escaped}['"]\\]|\\$_ENV\\[['"]${escaped}['"]\\])\\s*\\?\\?`);
+  const nullCoalescing = new RegExp(`(?:process\\.env\\.${escaped}|process\\.env\\[['"]${escaped}['"]\\]|\\$_ENV\\[['"]${escaped}['"]\\]|os\\.environ\\[['"]${escaped}['"]\\])\\s*\\?\\?`);
   return nullCoalescing.test(line);
 }
 
@@ -210,7 +223,7 @@ async function scanEnvVariablesInCode(basePath: string, files: string[]): Promis
           regex.lastIndex = 0;
           while ((match = regex.exec(codeLine)) !== null) {
             const variableName = match[1];
-            if (variableName && !PLACEHOLDER_ENV_NAMES.has(variableName)) {
+            if (variableName && !PLACEHOLDER_ENV_NAMES.has(variableName) && !TOOLING_ENV_NAMES.has(variableName)) {
               envVars.add(variableName);
               optional[variableName] = (optional[variableName] ?? true) && isEnvReferenceOptional(codeLine, variableName);
               sources[variableName] ??= [];
@@ -570,6 +583,28 @@ async function parseGemfile(filePath: string): Promise<{ dependencies: string[] 
   }
 }
 
+function findManifest(files: string[], filename: string): string | null {
+  if (files.includes(filename)) return filename;
+
+  const common = files.find(file => {
+    const normalized = file.replace(/\\/g, '/');
+    return normalized.endsWith(`/${filename}`)
+      && normalized.split('/').length <= 2
+      && /^(frontend|backend|server|client|app|web|api|packages\/[^/]+)\//.test(normalized);
+  });
+  if (common) return common;
+
+  const shallow = files.find(file => {
+    const normalized = file.replace(/\\/g, '/');
+    return normalized.endsWith(`/${filename}`) && normalized.split('/').length <= 2;
+  });
+  return shallow ?? null;
+}
+
+function hasManifest(files: string[], filename: string): boolean {
+  return findManifest(files, filename) !== null;
+}
+
 /**
  * Main function to scan a local repository and collect context.
  */
@@ -587,16 +622,17 @@ export async function scanProject(projectPath: string): Promise<ProjectContext> 
   const packageManager = detectPackageManager(files);
 
   // 1. Parse package.json if it exists
-  const hasPackageJson = files.includes('package.json');
-  if (hasPackageJson) {
+  const packageJsonPath = findManifest(files, 'package.json');
+  const hasPackageJson = packageJsonPath !== null;
+  if (packageJsonPath) {
     projectTypes.add('Node.js');
     try {
-      const content = await fs.readFile(path.join(resolvedPath, 'package.json'), 'utf-8');
+      const content = await fs.readFile(path.join(resolvedPath, packageJsonPath), 'utf-8');
       const pkg = JSON.parse(content);
       
-      if (pkg.name) projectName = pkg.name;
-      if (pkg.version) version = pkg.version;
-      if (pkg.description) description = pkg.description;
+      if (packageJsonPath === 'package.json' && pkg.name) projectName = pkg.name;
+      if (packageJsonPath === 'package.json' && pkg.version) version = pkg.version;
+      if (packageJsonPath === 'package.json' && pkg.description) description = pkg.description;
       if (pkg.scripts) scripts = pkg.scripts;
       if (pkg.dependencies) dependencies = Object.keys(pkg.dependencies);
       if (pkg.devDependencies) devDependencies = Object.keys(pkg.devDependencies);
@@ -606,13 +642,14 @@ export async function scanProject(projectPath: string): Promise<ProjectContext> 
   }
 
   // 2. Parse Cargo.toml (Rust) if it exists
-  const hasCargoToml = files.includes('Cargo.toml');
-  if (hasCargoToml) {
+  const cargoTomlPath = findManifest(files, 'Cargo.toml');
+  const hasCargoToml = cargoTomlPath !== null;
+  if (cargoTomlPath) {
     projectTypes.add('Rust');
-    const cargoData = await parseCargoToml(path.join(resolvedPath, 'Cargo.toml'));
-    if (cargoData.name && projectName === path.basename(resolvedPath)) projectName = cargoData.name;
-    if (cargoData.version) version = cargoData.version;
-    if (cargoData.description) description = cargoData.description;
+    const cargoData = await parseCargoToml(path.join(resolvedPath, cargoTomlPath));
+    if (cargoTomlPath === 'Cargo.toml' && cargoData.name && projectName === path.basename(resolvedPath)) projectName = cargoData.name;
+    if (cargoTomlPath === 'Cargo.toml' && cargoData.version) version = cargoData.version;
+    if (cargoTomlPath === 'Cargo.toml' && cargoData.description) description = cargoData.description;
     dependencies.push(...cargoData.dependencies);
     devDependencies.push(...cargoData.devDependencies);
     
@@ -627,13 +664,14 @@ export async function scanProject(projectPath: string): Promise<ProjectContext> 
   }
 
   // 3. Parse pyproject.toml (Python) if it exists
-  const hasPyProject = files.includes('pyproject.toml');
-  if (hasPyProject) {
+  const pyProjectPath = findManifest(files, 'pyproject.toml');
+  const hasPyProject = pyProjectPath !== null;
+  if (pyProjectPath) {
     projectTypes.add('Python');
-    const pyData = await parsePyProjectToml(path.join(resolvedPath, 'pyproject.toml'));
-    if (pyData.name && projectName === path.basename(resolvedPath)) projectName = pyData.name;
-    if (pyData.version) version = pyData.version;
-    if (pyData.description) description = pyData.description;
+    const pyData = await parsePyProjectToml(path.join(resolvedPath, pyProjectPath));
+    if (pyProjectPath === 'pyproject.toml' && pyData.name && projectName === path.basename(resolvedPath)) projectName = pyData.name;
+    if (pyProjectPath === 'pyproject.toml' && pyData.version) version = pyData.version;
+    if (pyProjectPath === 'pyproject.toml' && pyData.description) description = pyData.description;
     dependencies.push(...pyData.dependencies);
     
     if (Object.keys(scripts).length === 0) {
@@ -645,19 +683,21 @@ export async function scanProject(projectPath: string): Promise<ProjectContext> 
   }
 
   // 4. Parse requirements.txt (Python) if it exists
-  const hasRequirements = files.includes('requirements.txt');
-  if (hasRequirements) {
+  const requirementsPath = findManifest(files, 'requirements.txt');
+  const hasRequirements = requirementsPath !== null;
+  if (requirementsPath) {
     projectTypes.add('Python');
-    const reqDeps = await parseRequirementsTxt(path.join(resolvedPath, 'requirements.txt'));
+    const reqDeps = await parseRequirementsTxt(path.join(resolvedPath, requirementsPath));
     dependencies.push(...reqDeps);
   }
 
   // 5. Parse go.mod (Go) if it exists
-  const hasGoMod = files.includes('go.mod');
-  if (hasGoMod) {
+  const goModPath = findManifest(files, 'go.mod');
+  const hasGoMod = goModPath !== null;
+  if (goModPath) {
     projectTypes.add('Go');
-    const goData = await parseGoMod(path.join(resolvedPath, 'go.mod'));
-    if (goData.name && projectName === path.basename(resolvedPath)) projectName = goData.name;
+    const goData = await parseGoMod(path.join(resolvedPath, goModPath));
+    if (goModPath === 'go.mod' && goData.name && projectName === path.basename(resolvedPath)) projectName = goData.name;
     dependencies.push(...goData.dependencies);
     
     if (Object.keys(scripts).length === 0) {
@@ -670,13 +710,14 @@ export async function scanProject(projectPath: string): Promise<ProjectContext> 
   }
 
   // 6. Parse composer.json (PHP) if it exists
-  const hasComposer = files.includes('composer.json');
-  if (hasComposer) {
+  const composerPath = findManifest(files, 'composer.json');
+  const hasComposer = composerPath !== null;
+  if (composerPath) {
     projectTypes.add('PHP');
-    const composerData = await parseComposerJson(path.join(resolvedPath, 'composer.json'));
-    if (composerData.name && projectName === path.basename(resolvedPath)) projectName = composerData.name;
-    if (composerData.version) version = composerData.version;
-    if (composerData.description) description = composerData.description;
+    const composerData = await parseComposerJson(path.join(resolvedPath, composerPath));
+    if (composerPath === 'composer.json' && composerData.name && projectName === path.basename(resolvedPath)) projectName = composerData.name;
+    if (composerPath === 'composer.json' && composerData.version) version = composerData.version;
+    if (composerPath === 'composer.json' && composerData.description) description = composerData.description;
     dependencies.push(...composerData.dependencies);
     devDependencies.push(...composerData.devDependencies);
     
@@ -700,13 +741,14 @@ export async function scanProject(projectPath: string): Promise<ProjectContext> 
   }
 
   // 7. Parse pom.xml (Java/Maven) if it exists
-  const hasPom = files.includes('pom.xml');
-  if (hasPom) {
+  const pomPath = findManifest(files, 'pom.xml');
+  const hasPom = pomPath !== null;
+  if (pomPath) {
     projectTypes.add('Java/Maven');
-    const pomData = await parsePomXml(path.join(resolvedPath, 'pom.xml'));
-    if (pomData.name && projectName === path.basename(resolvedPath)) projectName = pomData.name;
-    if (pomData.version) version = pomData.version;
-    if (pomData.description) description = pomData.description;
+    const pomData = await parsePomXml(path.join(resolvedPath, pomPath));
+    if (pomPath === 'pom.xml' && pomData.name && projectName === path.basename(resolvedPath)) projectName = pomData.name;
+    if (pomPath === 'pom.xml' && pomData.version) version = pomData.version;
+    if (pomPath === 'pom.xml' && pomData.description) description = pomData.description;
     dependencies.push(...pomData.dependencies);
     
     if (Object.keys(scripts).length === 0) {
@@ -719,10 +761,11 @@ export async function scanProject(projectPath: string): Promise<ProjectContext> 
   }
 
   // 8. Parse Gemfile (Ruby) if it exists
-  const hasGemfile = files.includes('Gemfile');
-  if (hasGemfile) {
+  const gemfilePath = findManifest(files, 'Gemfile');
+  const hasGemfile = gemfilePath !== null;
+  if (gemfilePath) {
     projectTypes.add('Ruby');
-    const gemData = await parseGemfile(path.join(resolvedPath, 'Gemfile'));
+    const gemData = await parseGemfile(path.join(resolvedPath, gemfilePath));
     dependencies.push(...gemData.dependencies);
     
     if (Object.keys(scripts).length === 0) {
