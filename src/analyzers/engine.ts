@@ -22,20 +22,28 @@ const RULES: Rule[] = [
 function calculateScore(issues: Issue[], hasReadme: boolean): number {
   if (!hasReadme) return 0;
   
-  let score = 100;
+  const penaltiesByRule = new Map<string, number>();
+
   for (const issue of issues) {
+    let penalty = 0;
     switch (issue.severity) {
       case 'error':
-        score -= 30;
+        penalty = 25;
         break;
       case 'warning':
-        score -= 15;
+        penalty = 10;
         break;
       case 'info':
-        score -= 5;
+        penalty = 3;
         break;
     }
+
+    const current = penaltiesByRule.get(issue.ruleName) ?? 0;
+    const cap = issue.ruleName.includes('Environment') ? 25 : 35;
+    penaltiesByRule.set(issue.ruleName, Math.min(cap, current + penalty));
   }
+
+  const score = 100 - Array.from(penaltiesByRule.values()).reduce((sum, penalty) => sum + penalty, 0);
   return Math.max(0, Math.min(100, score));
 }
 

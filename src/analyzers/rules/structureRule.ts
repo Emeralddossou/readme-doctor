@@ -25,7 +25,7 @@ export class StructureRule implements Rule {
     },
     {
       name: 'Usage',
-      aliases: ['usage', 'run', 'running', 'example', 'examples', 'utilisation', 'lancement'],
+      aliases: ['usage', 'run', 'running', 'example', 'examples', 'utilisation', 'lancement', 'lancer', 'gameplay', 'jouer', 'development', 'développement', 'developpement', 'localement'],
       severity: 'warning',
       description: 'The README is missing a section explaining how to run or use the project.',
       suggestion: 'Add a "Usage" section with clear examples or command-line scripts to run the application. For example:\n\n## Usage\n```bash\nnpm start\n```'
@@ -54,6 +54,23 @@ export class StructureRule implements Rule {
     }
   ];
 
+  private getUsageSuggestion(projectContext: ProjectContext): string {
+    const scripts = Object.keys(projectContext.scripts);
+    if (projectContext.projectTypes?.includes('PHP')) {
+      return 'Add a "Usage" or "Development" section with the actual local launch command. For example:\n\n## Usage\n```bash\nphp -S localhost:8000\n```';
+    }
+
+    if (scripts.includes('dev')) {
+      return 'Add a "Usage" section with the project development command. For example:\n\n## Usage\n```bash\nnpm run dev\n```';
+    }
+
+    if (scripts.includes('start')) {
+      return 'Add a "Usage" section with the project start command. For example:\n\n## Usage\n```bash\nnpm start\n```';
+    }
+
+    return 'Add a "Usage" section with clear examples or command-line scripts to run the application.';
+  }
+
   async run(projectContext: ProjectContext, readmeContext: ReadmeContext): Promise<Issue[]> {
     const issues: Issue[] = [];
     
@@ -70,6 +87,10 @@ export class StructureRule implements Rule {
         continue;
       }
 
+      if (req.name === 'License' && /licen[csz]e|licence|licensed under|mit license|apache license|gpl|bsd/i.test(projectContext.readmeContent)) {
+        continue;
+      }
+
       // Check if any existing section matches the aliases
       const matches = sections.some(sec => {
         const titleLower = sec.title.toLowerCase();
@@ -82,7 +103,7 @@ export class StructureRule implements Rule {
           severity: req.severity,
           ruleName: this.name,
           message: req.description,
-          suggestion: req.suggestion,
+          suggestion: req.name === 'Usage' ? this.getUsageSuggestion(projectContext) : req.suggestion,
           confidence: 'medium',
           fixType: 'readme-section',
           evidence: [

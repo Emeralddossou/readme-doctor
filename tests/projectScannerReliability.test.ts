@@ -38,6 +38,37 @@ describe('Project scanner reliability', () => {
       await rm(repo, { recursive: true, force: true });
     }
   });
+
+  it('detects PHP projects without composer and ignores PHP request server variables', async () => {
+    const repo = await mkdtemp(path.join(os.tmpdir(), 'readme-doctor-php-'));
+
+    try {
+      await writeFile(path.join(repo, 'README.md'), '# PHP App\n');
+      await writeFile(path.join(repo, '.env.example'), 'APP_ENV=development\nDB_HOST=localhost\n');
+      await writeFile(path.join(repo, 'index.php'), [
+        '<?php',
+        "$env = env_get('APP_ENV', 'development');",
+        "$host = env_get('DB_HOST');",
+        "$method = $_SERVER['REQUEST_METHOD'] ?? 'GET';"
+      ].join('\n'));
+      await mkdir(path.join(repo, 'tests'));
+      await writeFile(path.join(repo, 'tests', 'ExampleTest.php'), '<?php // PHPUnit fixture');
+
+      const context = await scanProject(repo);
+
+      expect(context.projectTypes).toContain('PHP');
+      expect(context.scripts).toMatchObject({
+        serve: 'php -S localhost:8000',
+        test: 'vendor/bin/phpunit tests/'
+      });
+      expect(context.envVariables).toEqual(['APP_ENV', 'DB_HOST']);
+      expect(context.envVariables).not.toContain('REQUEST_METHOD');
+      expect(context.envVariableOptional.APP_ENV).toBe(true);
+      expect(context.envVariableOptional.DB_HOST).toBe(false);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('README parser evidence', () => {

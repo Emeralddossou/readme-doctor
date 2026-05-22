@@ -52,14 +52,18 @@ export function generateLocalSummary(context: ProjectContext): string {
   const types = context.projectTypes.length > 0 ? context.projectTypes.join(', ') : 'general software';
   const description = context.description || `A ${types} project named ${context.projectName}.`;
   const scripts = Object.keys(context.scripts);
+  const documentedOrRequiredEnvVars = Array.from(new Set([
+    ...context.envExampleVariables,
+    ...context.envVariables.filter(envVar => !context.envVariableOptional?.[envVar] || context.envExampleVariables.includes(envVar))
+  ])).sort();
   const scriptText = scripts.length > 0
-    ? ` It exposes ${scripts.length} package script(s): ${scripts.join(', ')}.`
+    ? ` It exposes ${scripts.length} workflow command(s): ${scripts.join(', ')}.`
     : '';
   const dockerText = context.hasDocker || context.hasDockerCompose
     ? ' Docker support is present in the repository.'
     : '';
-  const envText = context.envVariables.length > 0 || context.envExampleVariables.length > 0
-    ? ` It uses environment configuration (${Array.from(new Set([...context.envVariables, ...context.envExampleVariables])).join(', ')}).`
+  const envText = documentedOrRequiredEnvVars.length > 0
+    ? ` It uses environment configuration (${documentedOrRequiredEnvVars.join(', ')}).`
     : '';
 
   return `${description} Detected project type: ${types}.${scriptText}${dockerText}${envText}`.trim();
@@ -69,7 +73,10 @@ export function generateLocalReadme(context: ProjectContext): string {
   const lines: string[] = [];
   const installCommand = getInstallCommand(context);
   const usageCommands = selectUsageCommands(context);
-  const envVars = Array.from(new Set([...context.envExampleVariables, ...context.envVariables])).sort();
+  const envVars = Array.from(new Set([
+    ...context.envExampleVariables,
+    ...context.envVariables.filter(envVar => !context.envVariableOptional?.[envVar] || context.envExampleVariables.includes(envVar))
+  ])).sort();
 
   lines.push(`# ${context.projectName}`);
   lines.push('');

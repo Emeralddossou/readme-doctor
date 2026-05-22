@@ -138,12 +138,31 @@ function isLikelyTestFile(file: string): boolean {
     || /\.(test|spec)\.[a-z0-9]+$/.test(normalized);
 }
 
+function hasPhpApplicationFiles(files: string[]): boolean {
+  return files.some(file => path.extname(file).toLowerCase() === '.php');
+}
+
+function hasPhpUnitTests(files: string[]): boolean {
+  return files.some(file => file.replace(/\\/g, '/').toLowerCase().includes('tests/')
+    && path.extname(file).toLowerCase() === '.php');
+}
+
+function isEnvReferenceOptional(line: string, variableName: string): boolean {
+  const escaped = variableName.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+  const functionWithDefault = new RegExp(`\\b(?:env|env_get|getenv)\\s*\\(\\s*['"]${escaped}['"]\\s*,`);
+  if (functionWithDefault.test(line)) return true;
+
+  const nullCoalescing = new RegExp(`(?:process\\.env\\.${escaped}|process\\.env\\[['"]${escaped}['"]\\]|\\$_ENV\\[['"]${escaped}['"]\\])\\s*\\?\\?`);
+  return nullCoalescing.test(line);
+}
+
 /**
  * Scans source files to detect usage of environment variables.
  */
-async function scanEnvVariablesInCode(basePath: string, files: string[]): Promise<{ variables: string[], sources: Record<string, IssueEvidence[]> }> {
+async function scanEnvVariablesInCode(basePath: string, files: string[]): Promise<{ variables: string[], sources: Record<string, IssueEvidence[]>, optional: Record<string, boolean> }> {
   const envVars = new Set<string>();
   const sources: Record<string, IssueEvidence[]> = {};
+  const optional: Record<string, boolean> = {};
   
   // Regexes for different languages
   const regexes = [
@@ -154,11 +173,11 @@ async function scanEnvVariablesInCode(basePath: string, files: string[]): Promis
     /os\.(?:environ(?:.get)?|getenv)\(['"]([A-Z_][A-Z0-9_]*)['"]\)/g,
     // Go: os.Getenv("VAR_NAME")
     /os\.Getenv\(['"]([A-Z_][A-Z0-9_]*)['"]\)/g,
-    // PHP: getenv('VAR_NAME'), $_ENV['VAR_NAME'], $_SERVER['VAR_NAME'], env('VAR_NAME')
+    // PHP config env access. $_SERVER is intentionally excluded: it contains HTTP/request metadata, not .env config.
     /getenv\(['"]([A-Z_][A-Z0-9_]*)['"]\)/g,
     /\$_ENV\[['"]([A-Z_][A-Z0-9_]*)['"]\]/g,
-    /\$_SERVER\[['"]([A-Z_][A-Z0-9_]*)['"]\]/g,
     /env\(['"]([A-Z_][A-Z0-9_]*)['"]\)/g,
+    /env_get\(['"]([A-Z_][A-Z0-9_]*)['"]/g,
     // Ruby: ENV['VAR_NAME'] or ENV.fetch('VAR_NAME')
     /ENV\[['"]([A-Z_][A-Z0-9_]*)['"]\]/g,
     /ENV\.fetch\(['"]([A-Z_][A-Z0-9_]*)['"]\)/g,
@@ -193,6 +212,7 @@ async function scanEnvVariablesInCode(basePath: string, files: string[]): Promis
             const variableName = match[1];
             if (variableName && !PLACEHOLDER_ENV_NAMES.has(variableName)) {
               envVars.add(variableName);
+              optional[variableName] = (optional[variableName] ?? true) && isEnvReferenceOptional(codeLine, variableName);
               sources[variableName] ??= [];
               if (sources[variableName].length < 5) {
                 sources[variableName].push({
@@ -213,7 +233,8 @@ async function scanEnvVariablesInCode(basePath: string, files: string[]): Promis
 
   return {
     variables: Array.from(envVars).sort(),
-    sources
+    sources,
+    optional
   };
 }
 
@@ -667,6 +688,17 @@ export async function scanProject(projectPath: string): Promise<ProjectContext> 
     }
   }
 
+  const hasPhpFiles = hasPhpApplicationFiles(files);
+  if (hasPhpFiles && !hasComposer) {
+    projectTypes.add('PHP');
+    if (Object.keys(scripts).length === 0) {
+      scripts = {
+        serve: 'php -S localhost:8000',
+        test: hasPhpUnitTests(files) ? 'vendor/bin/phpunit tests/' : 'php -l index.php'
+      };
+    }
+  }
+
   // 7. Parse pom.xml (Java/Maven) if it exists
   const hasPom = files.includes('pom.xml');
   if (hasPom) {
@@ -738,6 +770,7 @@ export async function scanProject(projectPath: string): Promise<ProjectContext> 
     hasDockerCompose,
     envVariables,
     envVariableSources: envScan.sources,
+    envVariableOptional: envScan.optional,
     envExampleVariables,
     files,
     readmePath,

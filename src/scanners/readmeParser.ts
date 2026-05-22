@@ -100,6 +100,28 @@ export function parseReadme(content: string | null): ReadmeContext {
     });
   }
 
+  // Markdown fences are often malformed in real READMEs. Add a lightweight
+  // heading recovery pass so one broken code block does not hide every
+  // subsequent section from structure rules.
+  const knownHeadings = new Set(sections.map(section => `${section.level}:${section.title.toLowerCase()}`));
+  for (let index = 0; index < lines.length; index++) {
+    const match = lines[index].match(headingRegex);
+    if (!match) continue;
+    const level = match[1].length;
+    if (level < 2) continue;
+    const title = match[2].trim();
+    const key = `${level}:${title.toLowerCase()}`;
+    if (knownHeadings.has(key)) continue;
+
+    knownHeadings.add(key);
+    sections.push({
+      title,
+      level,
+      content: '',
+      line: index + 1
+    });
+  }
+
   return {
     sections,
     commands,

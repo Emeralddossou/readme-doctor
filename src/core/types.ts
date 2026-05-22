@@ -12,6 +12,7 @@ export interface ProjectContext {
   hasDockerCompose: boolean;
   envVariables: string[];
   envVariableSources: Record<string, IssueEvidence[]>;
+  envVariableOptional: Record<string, boolean>;
   envExampleVariables: string[];
   files: string[];
   readmePath: string | null;

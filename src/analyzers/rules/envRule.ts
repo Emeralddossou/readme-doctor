@@ -12,6 +12,14 @@ export class EnvRule implements Rule {
     const issues: Issue[] = [];
     const readmeText = projectContext.readmeContent || '';
     const envVariableSources = projectContext.envVariableSources ?? {};
+    const envVariableOptional = projectContext.envVariableOptional ?? {};
+    const hasEnvExample = projectContext.files.some(f => f.toLowerCase() === '.env.example');
+    const missingExampleVars: string[] = [];
+    const missingReadmeCodeVars: string[] = [];
+    const missingReadmeExampleVars: string[] = [];
+    const missingExampleEvidence: NonNullable<Issue['evidence']> = [];
+    const missingReadmeCodeEvidence: NonNullable<Issue['evidence']> = [];
+    const missingReadmeExampleEvidence: NonNullable<Issue['evidence']> = [];
     
     // 1. Check env variables used in code vs .env.example
     for (const codeVar of projectContext.envVariables) {
@@ -21,44 +29,23 @@ export class EnvRule implements Rule {
       }
 
       const inEnvExample = projectContext.envExampleVariables.includes(codeVar);
-      if (!inEnvExample && projectContext.files.some(f => f.toLowerCase() === '.env.example')) {
-        issues.push({
-          id: `${this.id}:missing-example:${codeVar}`,
-          severity: 'warning',
-          ruleName: this.name,
-          message: `Environment variable "${codeVar}" is used in the codebase but not declared in your ".env.example" file.`,
-          suggestion: `Add "${codeVar}=" to your ".env.example" file to ensure other developers know this variable is required.`,
-          confidence: 'high',
-          fixType: 'config-file',
-          evidence: envVariableSources[codeVar] ?? [
-            {
-              description: `Detected "${codeVar}" in source code.`
-            }
-          ]
-        });
+      if (!inEnvExample && hasEnvExample && !envVariableOptional[codeVar]) {
+        missingExampleVars.push(codeVar);
+        missingExampleEvidence.push(...(envVariableSources[codeVar] ?? [{
+          description: `Detected "${codeVar}" in source code.`
+        }]));
       }
 
       // Check if mentioned in README
       const escapedCodeVar = codeVar.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
       const codeVarRegex = new RegExp(`\\b${escapedCodeVar}\\b`, 'i');
       const mentionedInReadme = codeVarRegex.test(readmeText);
+      if (envVariableOptional[codeVar] && !inEnvExample) {
+        continue;
+      }
       if (!mentionedInReadme && readmeText) {
-        issues.push({
-          id: `${this.id}:missing-readme:${codeVar}`,
-          severity: 'info',
-          ruleName: this.name,
-          message: `Environment variable "${codeVar}" is used in the codebase but not documented in your README.`,
-          suggestion: `Add a section or reference in your README explaining what "${codeVar}" is used for and its expected values.`,
-          confidence: 'high',
-          fixType: 'readme-section',
-          evidence: [
-            ...(envVariableSources[codeVar] ?? []),
-            {
-              description: `README does not mention "${codeVar}".`,
-              file: projectContext.readmePath ?? 'README'
-            }
-          ]
-        });
+        missingReadmeCodeVars.push(codeVar);
+        missingReadmeCodeEvidence.push(...(envVariableSources[codeVar] ?? []));
       }
     }
 
@@ -73,30 +60,67 @@ export class EnvRule implements Rule {
       const mentionedInReadme = exampleVarRegex.test(readmeText);
       if (!mentionedInReadme && readmeText) {
         // Only add if not already added in step 1
-        const alreadyAdded = issues.some(iss => iss.id === `${this.id}:missing-readme:${exampleVar}`);
+        const alreadyAdded = missingReadmeCodeVars.includes(exampleVar);
         if (!alreadyAdded) {
-          issues.push({
-            id: `${this.id}:missing-readme-example:${exampleVar}`,
-            severity: 'info',
-            ruleName: this.name,
-            message: `Environment variable "${exampleVar}" is declared in ".env.example" but not documented in your README.`,
-            suggestion: `Document "${exampleVar}" in the configuration section of your README.`,
-            confidence: 'high',
-            fixType: 'readme-section',
-            evidence: [
-              {
-                description: `Variable is declared in .env.example.`,
-                file: '.env.example',
-                excerpt: `${exampleVar}=`
-              },
-              {
-                description: `README does not mention "${exampleVar}".`,
-                file: projectContext.readmePath ?? 'README'
-              }
-            ]
+          missingReadmeExampleVars.push(exampleVar);
+          missingReadmeExampleEvidence.push({
+            description: `Variable "${exampleVar}" is declared in .env.example.`,
+            file: '.env.example',
+            excerpt: `${exampleVar}=`
           });
         }
       }
+    }
+
+    if (missingExampleVars.length > 0) {
+      issues.push({
+        id: `${this.id}:missing-example`,
+        severity: 'warning',
+        ruleName: this.name,
+        message: `${missingExampleVars.length} required environment variable(s) are used in the codebase but missing from ".env.example": ${missingExampleVars.join(', ')}.`,
+        suggestion: `Add these required variable(s) to ".env.example":\n\n${missingExampleVars.map(v => `${v}=`).join('\n')}`,
+        confidence: 'high',
+        fixType: 'config-file',
+        evidence: missingExampleEvidence.slice(0, 10)
+      });
+    }
+
+    if (missingReadmeCodeVars.length > 0) {
+      issues.push({
+        id: `${this.id}:missing-readme`,
+        severity: 'info',
+        ruleName: this.name,
+        message: `${missingReadmeCodeVars.length} environment variable(s) are used in code but not documented in the README: ${missingReadmeCodeVars.join(', ')}.`,
+        suggestion: `Document these variable(s) in the README configuration section: ${missingReadmeCodeVars.join(', ')}.`,
+        confidence: 'high',
+        fixType: 'readme-section',
+        evidence: [
+          ...missingReadmeCodeEvidence.slice(0, 10),
+          {
+            description: `README does not mention: ${missingReadmeCodeVars.join(', ')}.`,
+            file: projectContext.readmePath ?? 'README'
+          }
+        ]
+      });
+    }
+
+    if (missingReadmeExampleVars.length > 0) {
+      issues.push({
+        id: `${this.id}:missing-readme-example`,
+        severity: 'info',
+        ruleName: this.name,
+        message: `${missingReadmeExampleVars.length} variable(s) declared in ".env.example" are not documented in the README: ${missingReadmeExampleVars.join(', ')}.`,
+        suggestion: `Document these ".env.example" variable(s) in the README configuration section: ${missingReadmeExampleVars.join(', ')}.`,
+        confidence: 'high',
+        fixType: 'readme-section',
+        evidence: [
+          ...missingReadmeExampleEvidence.slice(0, 10),
+          {
+            description: `README does not mention: ${missingReadmeExampleVars.join(', ')}.`,
+            file: projectContext.readmePath ?? 'README'
+          }
+        ]
+      });
     }
 
     return issues;
