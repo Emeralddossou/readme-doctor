@@ -20,7 +20,7 @@ README-Doctor is a professional, local-first developer tool that audits your rep
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/readme-doctor.git
+git clone https://github.com/Emeralddossou/readme-doctor.git
 cd readme-doctor
 
 # Install dependencies
@@ -57,23 +57,30 @@ Audits your README.md against codebase scripts and environment variables.
 ```bash
 npm start -- scan ./
 ```
+Or
+```bash
+npm start -- scan ./../local/path/to/your/codebase
+```
 *Options:*
 *   `-j, --json` : Outputs report in JSON format.
 *   `-o, --output <file>` : Saves report to a file.
+*   `-q, --quiet` : Suppresses progress logs.
 *   `--no-ai` : Runs in local-only mode, bypassing any configured AI provider.
 
-### 2. Generate an intelligent project summary (AI-only)
+### 2. Generate an intelligent project summary
+Works locally by default and uses AI when a provider is configured.
 ```bash
 npm start -- summarize ./
 ```
 
-### 3. Automatically fix README inconsistencies (AI-only)
+### 3. Propose README fixes
+Produces deterministic local fixes and enriches them with AI when available.
 ```bash
 npm start -- fix ./
 ```
 
-### 4. Initialize a premium README template (AI-only)
-Generates a complete template tailored to the codebase structure and settings.
+### 4. Initialize a README template
+Generates a complete template tailored to the codebase structure and settings. It works locally, with optional AI enhancement.
 ```bash
 npm start -- init ./
 ```
@@ -94,6 +101,12 @@ npm run test:watch
 
 ---
 
-## 📜 License
+## Contributing
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+Contributions are welcome. Please open an issue for bugs or proposals, and include tests when changing scanner behavior, analysis rules, CLI output, or security-related code.
+
+---
+
+## License
+
+This project is licensed under the GNU General Public License - see the LICENSE file for details.

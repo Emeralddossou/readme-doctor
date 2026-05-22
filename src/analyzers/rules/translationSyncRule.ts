@@ -105,7 +105,7 @@ export class TranslationSyncRule implements Rule {
     for (const translationFile of translationFiles) {
       let content = '';
       try {
-        content = await fs.readFile(translationFile, 'utf-8');
+        content = await fs.readFile(path.join(projectContext.rootPath ?? process.cwd(), translationFile), 'utf-8');
       } catch {
         continue; // skip if unreadable
       }
@@ -127,7 +127,19 @@ export class TranslationSyncRule implements Rule {
             severity: 'warning',
             ruleName: this.name,
             message: `The translation file "${translationFile}" (${langName}) is missing the "${req.name}" section, which is documented in the main README.`,
-            suggestion: `Add the missing "${req.name}" section in "${translationFile}" to maintain structure alignment with the main README.md.`
+            suggestion: `Add the missing "${req.name}" section in "${translationFile}" to maintain structure alignment with the main README.md.`,
+            confidence: 'medium',
+            fixType: 'readme-section',
+            evidence: [
+              {
+                description: `"${req.name}" exists in the main README.`,
+                file: mainReadmePath
+              },
+              {
+                description: `"${req.name}" is missing from this translated README.`,
+                file: translationFile
+              }
+            ]
           });
         }
       }

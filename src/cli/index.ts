@@ -5,6 +5,7 @@ import { scanProject } from '../scanners/projectScanner.js';
 import { parseReadme } from '../scanners/readmeParser.js';
 import { analyzeProject } from '../analyzers/engine.js';
 import { generateMarkdownReport, generateJsonReport, colorizeMarkdown } from '../reports/generator.js';
+import { generateLocalFixes, generateLocalReadme, generateLocalSummary } from '../reports/localGenerator.js';
 import { getAIProvider } from '../ai/index.js';
 import { ProjectContext } from '../core/types.js';
 
@@ -16,14 +17,7 @@ function printDashboard(projectContext: ProjectContext): void {
     return lower.startsWith('readme') && lower.endsWith('.md') && lower !== mainReadme;
   });
 
-  const projectTypes: string[] = [];
-  if (projectContext.files.includes('package.json')) projectTypes.push('Node.js');
-  if (projectContext.files.includes('Cargo.toml')) projectTypes.push('Rust');
-  if (projectContext.files.includes('go.mod')) projectTypes.push('Go');
-  if (projectContext.files.includes('pyproject.toml') || projectContext.files.includes('requirements.txt')) projectTypes.push('Python');
-  if (projectContext.files.includes('composer.json')) projectTypes.push('PHP');
-  if (projectContext.files.includes('pom.xml')) projectTypes.push('Java/Maven');
-  if (projectContext.files.includes('Gemfile')) projectTypes.push('Ruby');
+  const projectTypes = projectContext.projectTypes ?? [];
   const projectTypeStr = projectTypes.join(', ') || 'Unknown / General';
 
   const scriptsCount = Object.keys(projectContext.scripts).length;
@@ -75,9 +69,17 @@ export function setupCLI(): Command {
     .argument('[repoPath]', 'Path to the local repository', '.')
     .option('-j, --json', 'Output report in JSON format')
     .option('-o, --output <file>', 'Save the report to a file')
+    .option('-q, --quiet', 'Suppress progress logs')
     .option('--no-ai', 'Disable AI features, running pure local analysis')
     .option('--strict', 'Exit with code 1 if issues are found (useful for CI/CD)')
     .action(async (repoPath, options) => {
+      const writeStdout = console.log.bind(console);
+      const originalLog = console.log;
+      if (options.json) {
+        console.log = (...args: unknown[]) => console.error(...args);
+      } else if (options.quiet) {
+        console.log = () => undefined;
+      }
       try {
         console.log(`🔍 Scanning repository at: ${path.resolve(repoPath)}...`);
         const projectContext = await scanProject(repoPath);
@@ -89,6 +91,7 @@ export function setupCLI(): Command {
         
         console.log('⚡ Running static analysis rules...');
         const report = await analyzeProject(projectContext, readmeContext);
+        report.summary = generateLocalSummary(projectContext);
         
         const aiProvider = options.ai ? getAIProvider() : null;
         if (aiProvider) {
@@ -106,15 +109,20 @@ export function setupCLI(): Command {
         }
 
         // Generate output
+        console.log = originalLog;
         const outputContent = options.json ? generateJsonReport(report) : generateMarkdownReport(report);
 
         if (options.output) {
           const outputPath = path.resolve(options.output);
           await fs.writeFile(outputPath, outputContent, 'utf-8');
-          console.log(`✅ Report successfully saved to: ${outputPath}`);
+          if (!options.quiet) {
+            console.log(`✅ Report successfully saved to: ${outputPath}`);
+          }
         } else {
-          console.log('\n--- REPORT OUTPUT ---');
-          console.log(options.json ? outputContent : colorizeMarkdown(outputContent));
+          if (!options.json) {
+            console.log('\n--- REPORT OUTPUT ---');
+          }
+          writeStdout(options.json ? outputContent : colorizeMarkdown(outputContent));
         }
 
         const strictIssues = report.issues.filter(i => i.severity === 'error' || i.severity === 'warning');
@@ -123,6 +131,7 @@ export function setupCLI(): Command {
           process.exit(1);
         }
       } catch (err: any) {
+        console.log = originalLog;
         console.error(`❌ Scan failed: ${err.message}`);
         process.exit(1);
       }
@@ -137,10 +146,12 @@ export function setupCLI(): Command {
       try {
         const aiProvider = getAIProvider();
         if (!aiProvider) {
-          console.error('❌ Error: AI provider requires GEMINI_API_KEY or GROQ_API_KEY to be set in environment variables.');
-          process.exit(1);
+          console.log(`Reading repository at: ${path.resolve(repoPath)}...`);
+          const projectContext = await scanProject(repoPath);
+          console.log('\n--- PROJECT SUMMARY ---');
+          console.log(generateLocalSummary(projectContext));
+          return;
         }
-
         console.log(`🔍 Reading repository at: ${path.resolve(repoPath)}...`);
         const projectContext = await scanProject(repoPath);
 
@@ -165,10 +176,14 @@ export function setupCLI(): Command {
       try {
         const aiProvider = getAIProvider();
         if (!aiProvider) {
-          console.error('❌ Error: AI provider requires GEMINI_API_KEY or GROQ_API_KEY to be set in environment variables.');
-          process.exit(1);
+          console.log(`Analyzing codebase at: ${path.resolve(repoPath)}...`);
+          const projectContext = await scanProject(repoPath);
+          const generatedReadme = generateLocalReadme(projectContext);
+          const outputPath = path.resolve(options.output);
+          await fs.writeFile(outputPath, generatedReadme, 'utf-8');
+          console.log(`\nLocal README created and saved to: ${outputPath}`);
+          return;
         }
-
         console.log(`🔍 Analyzing codebase at: ${path.resolve(repoPath)}...`);
         const projectContext = await scanProject(repoPath);
 
@@ -195,10 +210,14 @@ export function setupCLI(): Command {
       try {
         const aiProvider = getAIProvider();
         if (!aiProvider) {
-          console.error('❌ Error: AI provider requires GEMINI_API_KEY or GROQ_API_KEY to be set in environment variables.');
-          process.exit(1);
+          console.log(`Scanning repository at: ${path.resolve(repoPath)}...`);
+          const projectContext = await scanProject(repoPath);
+          const readmeContext = parseReadme(projectContext.readmeContent);
+          const report = await analyzeProject(projectContext, readmeContext);
+          console.log('\n--- SUGGESTED README FIXES ---');
+          console.log(generateLocalFixes(report));
+          return;
         }
-
         console.log(`🔍 Scanning repository at: ${path.resolve(repoPath)}...`);
         const projectContext = await scanProject(repoPath);
         const readmeContext = parseReadme(projectContext.readmeContent);

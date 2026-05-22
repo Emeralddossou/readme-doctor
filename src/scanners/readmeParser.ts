@@ -1,4 +1,4 @@
-import { ReadmeContext, ReadmeSection } from '../core/types.js';
+import { ReadmeCommand, ReadmeContext, ReadmeSection } from '../core/types.js';
 
 /**
  * Parses README content to split it into sections by Markdown headings
@@ -11,21 +11,25 @@ export function parseReadme(content: string | null): ReadmeContext {
 
   const sections: ReadmeSection[] = [];
   const commands: string[] = [];
+  const commandDetails: ReadmeCommand[] = [];
 
   const lines = content.split(/\r?\n/);
   
   let currentTitle = 'Introduction';
   let currentLevel = 1;
+  let currentStartLine = 1;
   let currentLines: string[] = [];
   
   let inCodeBlock = false;
   let codeBlockLanguage = '';
-  let codeBlockLines: string[] = [];
+  let codeBlockLines: Array<{ text: string; line: number }> = [];
 
   const headingRegex = /^(#{1,6})\s+(.+)$/;
   const codeBlockRegex = /^```(\w*)/;
 
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    const lineNumber = index + 1;
     // Check for code blocks
     const codeBlockMatch = line.match(codeBlockRegex);
     if (codeBlockMatch) {
@@ -35,11 +39,15 @@ export function parseReadme(content: string | null): ReadmeContext {
         // Extract commands if the language is shell-like or empty
         const lang = codeBlockLanguage.toLowerCase();
         if (['bash', 'sh', 'shell', 'cmd', 'powershell', 'zsh', 'run', ''].includes(lang)) {
-          for (const codeLine of codeBlockLines) {
-            const trimmed = codeLine.trim();
+          for (let codeIndex = 0; codeIndex < codeBlockLines.length; codeIndex++) {
+            const trimmed = codeBlockLines[codeIndex].text.trim();
             // Skip comments and empty lines
             if (trimmed && !trimmed.startsWith('#') && !trimmed.startsWith('//')) {
               commands.push(trimmed);
+              commandDetails.push({
+                command: trimmed,
+                line: codeBlockLines[codeIndex].line
+              });
             }
           }
         }
@@ -54,7 +62,7 @@ export function parseReadme(content: string | null): ReadmeContext {
     }
 
     if (inCodeBlock) {
-      codeBlockLines.push(line);
+      codeBlockLines.push({ text: line, line: lineNumber });
       currentLines.push(line);
       continue;
     }
@@ -68,11 +76,13 @@ export function parseReadme(content: string | null): ReadmeContext {
         sections.push({
           title: currentTitle,
           level: currentLevel,
-          content: contentStr
+          content: contentStr,
+          line: currentStartLine
         });
       }
       currentLevel = headingMatch[1].length;
       currentTitle = headingMatch[2].trim();
+      currentStartLine = lineNumber;
       currentLines = [];
     } else {
       currentLines.push(line);
@@ -85,12 +95,14 @@ export function parseReadme(content: string | null): ReadmeContext {
     sections.push({
       title: currentTitle,
       level: currentLevel,
-      content: finalContentStr
+      content: finalContentStr,
+      line: currentStartLine
     });
   }
 
   return {
     sections,
-    commands
+    commands,
+    commandDetails
   };
 }

@@ -16,17 +16,44 @@ function getScoreBar(score: number): string {
 }
 
 /**
- * Format a single issue into markdown.
+ * Format a single issue into action-oriented markdown.
  */
 function formatIssueMarkdown(issue: Issue): string {
-  let severityEmoji = 'ℹ️ [INFO]';
-  if (issue.severity === 'error') severityEmoji = '❌ [ERROR]';
-  else if (issue.severity === 'warning') severityEmoji = '⚠️ [WARNING]';
+  let severityEmoji = 'INFO';
+  if (issue.severity === 'error') severityEmoji = 'ERROR';
+  else if (issue.severity === 'warning') severityEmoji = 'WARNING';
 
-  return `### ${severityEmoji} ${issue.ruleName}\n` +
-         `**Issue:** ${issue.message}\n\n` +
-         `**Recommendation:**\n${issue.suggestion}\n\n` +
-         `---`;
+  const lines = [
+    `### [${severityEmoji}] ${issue.ruleName}`,
+    `**Issue:** ${issue.message}`,
+    ''
+  ];
+
+  if (issue.confidence || issue.fixType) {
+    lines.push(`**Metadata:** ${[
+      issue.confidence ? `confidence: ${issue.confidence}` : null,
+      issue.fixType ? `fix: ${issue.fixType}` : null
+    ].filter(Boolean).join(' | ')}`);
+    lines.push('');
+  }
+
+  if (issue.evidence && issue.evidence.length > 0) {
+    lines.push('**Evidence:**');
+    for (const evidence of issue.evidence) {
+      const location = evidence.file
+        ? ` (${evidence.file}${evidence.line ? `:${evidence.line}` : ''})`
+        : '';
+      const excerpt = evidence.excerpt ? ` - \`${evidence.excerpt}\`` : '';
+      lines.push(`- ${evidence.description}${location}${excerpt}`);
+    }
+    lines.push('');
+  }
+
+  lines.push(`**Recommendation:**\n${issue.suggestion}`);
+  lines.push('');
+  lines.push('---');
+
+  return lines.join('\n');
 }
 
 /**
@@ -83,7 +110,7 @@ export function generateMarkdownReport(report: AnalysisReport): string {
   }
 
   if (report.summary) {
-    lines.push('## 📝 Project Summary (AI generated)');
+    lines.push('## 📝 Project Summary');
     lines.push(report.summary);
     lines.push('');
   }

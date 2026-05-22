@@ -35,6 +35,12 @@ export class LicenseRule implements Rule {
     }
   }
 
+  private readmeMentionsLicense(readmeText: string, readmeContext: ReadmeContext): boolean {
+    const hasLicenseSection = readmeContext.sections.some(section => /licen[csz]e/i.test(section.title));
+    const hasLicenseStatement = /\blicensed under\b|\bMIT License\b|\bApache License\b|\bGPL\b|\bBSD\b/i.test(readmeText);
+    return hasLicenseSection || hasLicenseStatement;
+  }
+
   async run(projectContext: ProjectContext, readmeContext: ReadmeContext): Promise<Issue[]> {
     const issues: Issue[] = [];
     const readmeText = projectContext.readmeContent || '';
@@ -50,18 +56,13 @@ export class LicenseRule implements Rule {
 
     if (licenseFile) {
       // 1. License file exists
-      const mentionsLicense = /licen[sz]e/i.test(readmeText);
+      const mentionsLicense = this.readmeMentionsLicense(readmeText, readmeContext);
 
       if (!mentionsLicense && readmeText) {
         // License exists in files but not in README
         let licenseType = 'project license';
         
-        // Attempt to detect license type from the file contents (relative to repo path)
-        // Wait, where is the repo path? We can assume it is either '.' or we can derive it.
-        // Wait, in cli/index.ts, the scanner gets repoPath, but Rule gets only ProjectContext.
-        // Wait, ProjectContext doesn't have basePath, but we can assume we are executing in the process CWD
-        // or we can look up relative to the current workspace. To be robust, let's use '.' as default CWD.
-        const detected = await this.detectLicenseType('.', licenseFile);
+        const detected = await this.detectLicenseType(projectContext.rootPath ?? process.cwd(), licenseFile);
         if (detected) {
           licenseType = `${detected} License`;
         }
@@ -71,19 +72,43 @@ export class LicenseRule implements Rule {
           severity: 'warning',
           ruleName: this.name,
           message: `A license file ("${licenseFile}") is present in the repository, but the license is not mentioned in the README.`,
-          suggestion: `Add a "License" section at the end of your README. For example:\n\n## License\nThis project is licensed under the ${licenseType} - see the [${licenseFile}](file:///${licenseFile}) file for details.`
+          suggestion: `Add a "License" section at the end of your README. For example:\n\n## License\nThis project is licensed under the ${licenseType} - see the [${licenseFile}](${licenseFile}) file for details.`,
+          confidence: 'high',
+          fixType: 'readme-section',
+          evidence: [
+            {
+              description: 'License file detected.',
+              file: licenseFile
+            },
+            {
+              description: 'README has no license section or license statement.',
+              file: projectContext.readmePath ?? 'README'
+            }
+          ]
         });
       }
     } else {
       // 2. No license file exists and README doesn't mention license either
-      const mentionsLicense = /licen[sz]e/i.test(readmeText);
+      const mentionsLicense = this.readmeMentionsLicense(readmeText, readmeContext);
       if (!mentionsLicense && readmeText) {
         issues.push({
           id: `${this.id}:missing-file`,
           severity: 'info',
           ruleName: this.name,
           message: 'No license file was detected in the project, and the README does not specify a license.',
-          suggestion: 'It is highly recommended to add an open source license (such as the MIT License) to clarify how others can use your code. Create a `LICENSE` file and mention it in the README.'
+          suggestion: 'It is highly recommended to add an open source license (such as the MIT License) to clarify how others can use your code. Create a `LICENSE` file and mention it in the README.',
+          confidence: 'medium',
+          fixType: 'manual',
+          evidence: [
+            {
+              description: 'No root license file was found.',
+              file: projectContext.rootPath
+            },
+            {
+              description: 'README has no license section or license statement.',
+              file: projectContext.readmePath ?? 'README'
+            }
+          ]
         });
       }
     }

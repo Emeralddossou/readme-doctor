@@ -35,7 +35,21 @@ export class DockerRule implements Rule {
           severity: 'warning',
           ruleName: this.name,
           message: `Docker files (${dockerType}) are present in your codebase, but Docker is not documented in the README.`,
-          suggestion: `Add a "Docker" or "Deployment" section to explain how developers can run the application containerized. Example:\n\n## Docker Setup\n${suggestedCommands}`
+          suggestion: `Add a "Docker" or "Deployment" section to explain how developers can run the application containerized. Example:\n\n## Docker Setup\n${suggestedCommands}`,
+          confidence: 'high',
+          fixType: 'readme-section',
+          evidence: [
+            ...projectContext.files
+              .filter(file => file === 'Dockerfile' || file.endsWith('/Dockerfile') || file.toLowerCase().includes('docker-compose'))
+              .map(file => ({
+                description: 'Docker-related file detected.',
+                file
+              })),
+            {
+              description: 'README does not mention Docker.',
+              file: projectContext.readmePath ?? 'README'
+            }
+          ]
         });
       }
     }

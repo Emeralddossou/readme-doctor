@@ -1,9 +1,10 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { ProjectContext } from '../core/types.js';
+import { IssueEvidence, ProjectContext } from '../core/types.js';
 
 const IGNORED_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', '.next', '.vuepress', '.gemini']);
 const SOURCE_EXTENSIONS = new Set(['.ts', '.js', '.tsx', '.jsx', '.py', '.go', '.rs', '.java', '.rb', '.php']);
+const PLACEHOLDER_ENV_NAMES = new Set(['VAR_NAME', 'VARIABLE_NAME', 'ENV_VAR', 'ENV_VARIABLE', 'YOUR_API_KEY', 'YOUR_TOKEN']);
 
 /**
  * Recursively lists all files in a directory up to a max limit to avoid memory/loop issues.
@@ -18,6 +19,7 @@ async function walkDir(dir: string, baseDir: string, maxFiles = 1000): Promise<s
     let entries;
     try {
       entries = await fs.readdir(currentDir, { withFileTypes: true });
+      entries.sort((a, b) => a.name.localeCompare(b.name));
     } catch {
       return; // Ignore inaccessible folders
     }
@@ -81,11 +83,67 @@ async function parseEnvExample(filePath: string): Promise<string[]> {
   }
 }
 
+function detectPackageManager(files: string[]): string | null {
+  if (files.includes('pnpm-lock.yaml')) return 'pnpm';
+  if (files.includes('yarn.lock')) return 'yarn';
+  if (files.includes('bun.lockb') || files.includes('bun.lock')) return 'bun';
+  if (files.includes('package-lock.json') || files.includes('npm-shrinkwrap.json')) return 'npm';
+  if (files.includes('package.json')) return 'npm';
+  return null;
+}
+
+function stripCommentsForEnvScan(line: string, ext: string, state: { inBlockComment: boolean }): string {
+  let output = line;
+
+  if (['.ts', '.js', '.tsx', '.jsx', '.go', '.rs', '.java', '.php'].includes(ext)) {
+    if (state.inBlockComment) {
+      const end = output.indexOf('*/');
+      if (end === -1) return '';
+      output = output.slice(end + 2);
+      state.inBlockComment = false;
+    }
+
+    while (output.includes('/*')) {
+      const start = output.indexOf('/*');
+      const end = output.indexOf('*/', start + 2);
+      if (end === -1) {
+        output = output.slice(0, start);
+        state.inBlockComment = true;
+        break;
+      }
+      output = output.slice(0, start) + output.slice(end + 2);
+    }
+
+    const lineComment = output.indexOf('//');
+    if (lineComment !== -1) {
+      output = output.slice(0, lineComment);
+    }
+  }
+
+  if (['.py', '.rb', '.php'].includes(ext)) {
+    const hashComment = output.indexOf('#');
+    if (hashComment !== -1) {
+      output = output.slice(0, hashComment);
+    }
+  }
+
+  return output;
+}
+
+function isLikelyTestFile(file: string): boolean {
+  const normalized = file.replace(/\\/g, '/').toLowerCase();
+  return normalized.includes('/test/')
+    || normalized.includes('/tests/')
+    || normalized.includes('/__tests__/')
+    || /\.(test|spec)\.[a-z0-9]+$/.test(normalized);
+}
+
 /**
  * Scans source files to detect usage of environment variables.
  */
-async function scanEnvVariablesInCode(basePath: string, files: string[]): Promise<string[]> {
+async function scanEnvVariablesInCode(basePath: string, files: string[]): Promise<{ variables: string[], sources: Record<string, IssueEvidence[]> }> {
   const envVars = new Set<string>();
+  const sources: Record<string, IssueEvidence[]> = {};
   
   // Regexes for different languages
   const regexes = [
@@ -113,19 +171,38 @@ async function scanEnvVariablesInCode(basePath: string, files: string[]): Promis
   // Only scan source files and limit to first 100 source files to keep it fast
   const sourceFiles = files
     .filter(f => SOURCE_EXTENSIONS.has(path.extname(f).toLowerCase()))
+    .filter(f => !isLikelyTestFile(f))
     .slice(0, 100);
 
   for (const file of sourceFiles) {
     try {
       const content = await fs.readFile(path.join(basePath, file), 'utf-8');
-      
-      for (const regex of regexes) {
-        let match;
-        // Reset regex index for safety
-        regex.lastIndex = 0;
-        while ((match = regex.exec(content)) !== null) {
-          if (match[1]) {
-            envVars.add(match[1]);
+      const ext = path.extname(file).toLowerCase();
+      const lines = content.split(/\r?\n/);
+      const commentState = { inBlockComment: false };
+
+      for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+        const originalLine = lines[lineIndex];
+        const codeLine = stripCommentsForEnvScan(originalLine, ext, commentState);
+
+        for (const regex of regexes) {
+          let match;
+          // Reset regex index for safety
+          regex.lastIndex = 0;
+          while ((match = regex.exec(codeLine)) !== null) {
+            const variableName = match[1];
+            if (variableName && !PLACEHOLDER_ENV_NAMES.has(variableName)) {
+              envVars.add(variableName);
+              sources[variableName] ??= [];
+              if (sources[variableName].length < 5) {
+                sources[variableName].push({
+                  description: `Detected environment variable "${variableName}" in source code.`,
+                  file,
+                  line: lineIndex + 1,
+                  excerpt: originalLine.trim()
+                });
+              }
+            }
           }
         }
       }
@@ -134,7 +211,10 @@ async function scanEnvVariablesInCode(basePath: string, files: string[]): Promis
     }
   }
 
-  return Array.from(envVars);
+  return {
+    variables: Array.from(envVars).sort(),
+    sources
+  };
 }
 
 /**
@@ -482,10 +562,13 @@ export async function scanProject(projectPath: string): Promise<ProjectContext> 
   let scripts: Record<string, string> = {};
   let dependencies: string[] = [];
   let devDependencies: string[] = [];
+  const projectTypes = new Set<string>();
+  const packageManager = detectPackageManager(files);
 
   // 1. Parse package.json if it exists
   const hasPackageJson = files.includes('package.json');
   if (hasPackageJson) {
+    projectTypes.add('Node.js');
     try {
       const content = await fs.readFile(path.join(resolvedPath, 'package.json'), 'utf-8');
       const pkg = JSON.parse(content);
@@ -504,6 +587,7 @@ export async function scanProject(projectPath: string): Promise<ProjectContext> 
   // 2. Parse Cargo.toml (Rust) if it exists
   const hasCargoToml = files.includes('Cargo.toml');
   if (hasCargoToml) {
+    projectTypes.add('Rust');
     const cargoData = await parseCargoToml(path.join(resolvedPath, 'Cargo.toml'));
     if (cargoData.name && projectName === path.basename(resolvedPath)) projectName = cargoData.name;
     if (cargoData.version) version = cargoData.version;
@@ -524,6 +608,7 @@ export async function scanProject(projectPath: string): Promise<ProjectContext> 
   // 3. Parse pyproject.toml (Python) if it exists
   const hasPyProject = files.includes('pyproject.toml');
   if (hasPyProject) {
+    projectTypes.add('Python');
     const pyData = await parsePyProjectToml(path.join(resolvedPath, 'pyproject.toml'));
     if (pyData.name && projectName === path.basename(resolvedPath)) projectName = pyData.name;
     if (pyData.version) version = pyData.version;
@@ -541,6 +626,7 @@ export async function scanProject(projectPath: string): Promise<ProjectContext> 
   // 4. Parse requirements.txt (Python) if it exists
   const hasRequirements = files.includes('requirements.txt');
   if (hasRequirements) {
+    projectTypes.add('Python');
     const reqDeps = await parseRequirementsTxt(path.join(resolvedPath, 'requirements.txt'));
     dependencies.push(...reqDeps);
   }
@@ -548,6 +634,7 @@ export async function scanProject(projectPath: string): Promise<ProjectContext> 
   // 5. Parse go.mod (Go) if it exists
   const hasGoMod = files.includes('go.mod');
   if (hasGoMod) {
+    projectTypes.add('Go');
     const goData = await parseGoMod(path.join(resolvedPath, 'go.mod'));
     if (goData.name && projectName === path.basename(resolvedPath)) projectName = goData.name;
     dependencies.push(...goData.dependencies);
@@ -564,6 +651,7 @@ export async function scanProject(projectPath: string): Promise<ProjectContext> 
   // 6. Parse composer.json (PHP) if it exists
   const hasComposer = files.includes('composer.json');
   if (hasComposer) {
+    projectTypes.add('PHP');
     const composerData = await parseComposerJson(path.join(resolvedPath, 'composer.json'));
     if (composerData.name && projectName === path.basename(resolvedPath)) projectName = composerData.name;
     if (composerData.version) version = composerData.version;
@@ -582,6 +670,7 @@ export async function scanProject(projectPath: string): Promise<ProjectContext> 
   // 7. Parse pom.xml (Java/Maven) if it exists
   const hasPom = files.includes('pom.xml');
   if (hasPom) {
+    projectTypes.add('Java/Maven');
     const pomData = await parsePomXml(path.join(resolvedPath, 'pom.xml'));
     if (pomData.name && projectName === path.basename(resolvedPath)) projectName = pomData.name;
     if (pomData.version) version = pomData.version;
@@ -600,6 +689,7 @@ export async function scanProject(projectPath: string): Promise<ProjectContext> 
   // 8. Parse Gemfile (Ruby) if it exists
   const hasGemfile = files.includes('Gemfile');
   if (hasGemfile) {
+    projectTypes.add('Ruby');
     const gemData = await parseGemfile(path.join(resolvedPath, 'Gemfile'));
     dependencies.push(...gemData.dependencies);
     
@@ -620,7 +710,8 @@ export async function scanProject(projectPath: string): Promise<ProjectContext> 
     ? await parseEnvExample(path.join(resolvedPath, envExamplePath)) 
     : [];
 
-  const envVariables = await scanEnvVariablesInCode(resolvedPath, files);
+  const envScan = await scanEnvVariablesInCode(resolvedPath, files);
+  const envVariables = envScan.variables;
 
   // Readme
   const readmePath = findReadme(files);
@@ -634,15 +725,19 @@ export async function scanProject(projectPath: string): Promise<ProjectContext> 
   }
 
   return {
+    rootPath: resolvedPath,
     projectName,
     version,
     description,
+    packageManager,
+    projectTypes: Array.from(projectTypes),
     scripts,
     dependencies,
     devDependencies,
     hasDocker,
     hasDockerCompose,
     envVariables,
+    envVariableSources: envScan.sources,
     envExampleVariables,
     files,
     readmePath,

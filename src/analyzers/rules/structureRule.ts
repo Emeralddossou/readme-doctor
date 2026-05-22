@@ -82,7 +82,15 @@ export class StructureRule implements Rule {
           severity: req.severity,
           ruleName: this.name,
           message: req.description,
-          suggestion: req.suggestion
+          suggestion: req.suggestion,
+          confidence: 'medium',
+          fixType: 'readme-section',
+          evidence: [
+            {
+              description: `README headings found: ${sections.map(sec => sec.title).join(', ') || 'none'}.`,
+              file: projectContext.readmePath ?? 'README'
+            }
+          ]
         });
       }
     }
